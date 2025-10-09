@@ -1,0 +1,41 @@
+html, body {
+    padding: 0;
+    margin: 0;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.page-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #FFFFFA;
+    min-height: 100vh;
+    width: 100vw;
+}
+
+.content-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center; 
+}
+
+.greeting {
+    font-size: 5rem;
+    letter-spacing: 2px;
+    color: #BF0000;
+    font-family: 'Courier New', Courier, monospace;
+    margin-bottom: 20px;
+}
+
+.btn-primary {
+    background-color: #BF0000 !important; 
+    border-color: #BF0000 !important; 
+    color: white !important;
+    transition: box-shadow 0.3s ease-in-out;
+}
+
+.btn-primary:hover {
+    box-shadow: 0 0 15px #BF0000;
+}

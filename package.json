@@ -1,0 +1,39 @@
+{
+  "name": "nlp-project",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "client": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "server": "python ./backend/flask_server.py",
+    "install-backend": "powershell -NoProfile -Command \"python -m venv .venv; .\\.venv\\Scripts\\Activate.ps1; python -m pip install --upgrade pip; pip install -r .\\backend\\requirements.txt\"",
+    "install-backend:unix": "sh -c 'python3 -m venv .venv && source .venv/bin/activate && python -m pip install --upgrade pip && pip install -r ./backend/requirements.txt'"
+  },
+  "dependencies": {
+    "bootstrap": "^5.3.3",
+    "child_process": "^1.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "framer-motion": "^12.5.0",
+    "react": "^19.0.0",
+    "react-chatbot-kit": "^2.2.2",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.21.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.21.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^15.15.0",
+    "vite": "^6.2.0"
+  }
+}

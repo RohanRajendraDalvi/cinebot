@@ -1,0 +1,157 @@
+.chat-page {
+  background-color: #FFFFFA;
+  height: 100vh;
+  width: 100%;
+  color: white;
+}
+
+.chatbot-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 20px 100px 20px; 
+  height: calc(100vh - 150px); 
+  overflow-y: auto;
+}
+
+.card {
+  width: 40rem;
+  background-color: #BF0000 !important;
+  color: #FFFFFA;
+  margin-bottom: 10px;
+}
+
+.card-left {
+  align-self: flex-start;
+}
+
+.card-right {
+  align-self: flex-end;
+}
+
+.card .card-body {
+  padding: 20px;
+}
+
+.card-text {
+  font-weight: bold;
+  font-size: 20px;
+}
+
+button {
+  margin-top: 20px;
+  padding: 10px 20px;
+  background-color: #BF0000;
+  border: none;
+  color: black;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #BF0000;
+}
+
+.user-input-container {
+  position: sticky;
+  bottom: 0;
+  background: #FFFFFA;
+  padding: 2% 3% 0 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+}
+
+.user-input-container input {
+  width: 70%;
+  padding: 14px 12px;
+  margin-right: 12px;
+  border: 2px solid black;
+  border-radius: 6px;
+  color: black;
+  background-color: white;
+  font-size: 16px;
+}
+
+.user-input-container button {
+  padding: 14px 22px;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  background-color: #BF0000;
+  color: #FFFFFA;
+}
+
+.col-2 .new-chat-btn {
+  width: 70%;
+  border-radius: 4px;
+  margin-top: 20px;
+  font-weight: bold;
+}
+
+.col-2 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: start;
+  border-right: 2px solid #7D7D7D;
+}
+
+.col-3{
+  font-size: 1rem !important;
+  font-weight: bold;
+  color: black;
+  margin-bottom: 1rem;
+  border-left: 2px solid #7D7D7D;
+}
+
+.toprow {
+  font-size: 1.5rem !important;
+  font-weight: bold;
+  color: black;
+}
+
+/* Progress Bar Styles */
+.progress-bar-container {
+  margin-top: 20px;
+  position: relative;
+  width: 100%;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  background-color: #e0e0e0;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  width: 0;
+  height: 100%;
+  background-color: #4caf50;
+  transition: width 0.5s ease-out;
+}
+
+.progress-text {
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  color: #333;
+  font-weight: bold;
+}
+
+/* Dynamic Progress Updates */
+.progress-bar-container[data-progress="Refining Query"] .progress-bar-fill {
+  width: 30%;
+}
+
+.progress-bar-container[data-progress="Generating Options"] .progress-bar-fill {
+  width: 60%;
+}
+
+.progress-bar-container[data-progress="Refining Final Answer"] .progress-bar-fill {
+  width: 100%;
+}

@@ -1,0 +1,39 @@
+.documentation-page {
+    background-color: #FFFFFA;
+    height: 100vh;
+    width: 100%;
+    color: white;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    box-sizing: border-box;
+  }
+  
+.heading {
+    color: #BF0000;
+    font-family: 'Courier New', Courier, monospace;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    text-align: center;
+    font-size: 3rem;
+    letter-spacing: 1px;
+    font-weight: 300;
+  }
+  
+.left-border {
+    border: none; 
+  }
+  
+.right-border {
+    border-left: 1px solid #ddd; 
+  }
+  
+.content {
+    padding: 20px;
+    flex-grow: 1; 
+  }
+  
+.documentation-page {
+    height: 100vh;
+  }
+  
