@@ -6,6 +6,7 @@
   "scripts": {
     "client": "vite",
     "build": "vite build",
+    "render": "vite preview --port 10000 --host 0.0.0.0",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "python ./backend/flask_server.py",
