@@ -1,5 +1,11 @@
 flask
 flask-cors
-chromadb
 python-dotenv
 groq
+psycopg2-binary
+sentence-transformers
+numpy
+pymongo
+bson
+requests
+certifi

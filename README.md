@@ -1,7 +1,13 @@
 
 # NLP-Project - Movie Chat + Semantic Search
 
-This repository is a full-stack experimental project that demonstrates a movie-focused conversational and semantic search application. It combines a React + Vite frontend (chat UI and saved sessions), a Flask backend that exposes semantic search endpoints, and local/remote model integration (FAISS vector indices, ChromaDB, Groq API and a local Ollama/Gemma setup).
+This repository is a full-stack experimental project that demonstrates a movie-focused conversational and semantic search application. It combines a React + Vite frontend (chat UI and saved sessions), a Flask backend that exposes semantic search endpoints, and integration with **Supabase PostgreSQL with pgvector** for retrieval and the Groq API for LLM responses. The stack has been simplified to Supabase + Groq only (legacy FAISS/Chroma/Ollama paths were removed).
+
+### New Features
+
+- **Supabase Integration**: Complete PostgreSQL vector database setup with pgvector extension for persistent, scalable embedding storage
+- **Automated Setup**: One-command installation script for all Python dependencies
+- **Vector Similarity Search**: Direct database queries using PostgreSQL's vector similarity functions
 
 This README documents what the app does, how it looks, how to run it locally (frontend + backend), how to use the APIs, and troubleshooting tips. It is intentionally detailed so you (or a teammate) can reproduce the environment and understand how data flows through the system.
 
@@ -26,13 +32,9 @@ This README documents what the app does, how it looks, how to run it locally (fr
 
 This project provides a conversational interface and advanced semantic search over a movie dataset. Key capabilities:
 
-- Natural language search for movies using embedding-based similarity (FAISS).
-- Multiple embedding model choices (switchable at query time) with separate FAISS indices per model.
-- Dual-query scoring (positive and negative queries) with tunable alpha and beta weights.
-- Metadata filtering (year, rating, duration, genres, languages).
-- Optional ChromaDB-backed retrieval path.
-- Integration points for LLM summarization/chat: Groq API (cloud) and local Ollama/Gemma.
-- A React UI for chat, model & filter controls, and saved chat sessions.
+- Natural language search for movies using embedding-based similarity via Supabase pgvector.
+- LLM summarization/chat via Groq API.
+- A React UI for chat and saved chat sessions.
 
 This repository is structured as a research/experimentation project. The code emphasizes modularity so you can swap vector stores, models, or ranking logic.
 
@@ -62,34 +64,81 @@ Top-level folders:
 
 - `backend/` — Flask application and server logic. Main file: `backend/flask_server.py`.
 - `src/` — React frontend code and components.
-- `faiss_embeddings1/`...`faiss_embeddings5/` — Prebuilt FAISS index files, metadata CSVs and id lists for different embedding runs.
-- `chromadb_client/` — ChromaDB persistent folder (sqlite files) used when model_choice `6` is selected.
-- `python-scripts/` — Notebooks and scripts used to precompute embeddings, build FAISS indices, and debug queries.
+- `python-scripts/` — Notebooks and scripts used to precompute embeddings and debug queries.
+  - `supabase_training.py` — Complete pipeline for uploading embeddings to Supabase PostgreSQL
+  - `supabase_training.ipynb` — Interactive notebook for testing Supabase integration
+- `install_dependencies.py` — Automated installation script for all Python dependencies
 
-Runtime files the server expects (ensure present):
+### Supabase Setup Files
 
-- FAISS index files: e.g. `faiss_embeddings1/movie_index.faiss`.
-- ID lists: `faiss_embeddings1/movie_ids.pkl` (pickle with ids in index order).
-- Metadata CSVs: `faiss_embeddings1/movie_metadata.csv` used to attach metadata to results.
-- ChromaDB folder: `chromadb_client/` with `chroma.sqlite3` and binary data blocks.
+For the new PostgreSQL vector database functionality:
 
-If you move the data folders, update the path mappings in `backend/flask_server.py`.
+- `supabase_training.py` — Python class for managing Supabase embedding pipeline
+- `supabase_training.ipynb` — Step-by-step notebook for testing database setup
+- `.env` — Environment configuration (add your Supabase credentials here)
+
+Runtime requirements:
+
+- A Supabase Postgres database with pgvector enabled and a `movies` table populated with embeddings (see `python-scripts/supabase_training.ipynb`).
 
 ## Prerequisites
 
 Install the following on your machine:
 
 - Node.js + npm (Node 18+ recommended).
-- Python 3.10+ (use a venv).
-- pip and build tools. For FAISS, consider conda on Windows if pip wheels are problematic.
-- Optional: Ollama (local) for `run-local-gemma` and a Groq API key for cloud LLM calls.
+- Python 3.8+ (use a venv).
+- Groq API key for cloud LLM calls.
 
-Notes about FAISS on Windows:
+### Quick Setup with Installation Script
 
-- The easiest path on Windows is to use conda/conda-forge: `conda install -c conda-forge faiss-cpu`.
-- Alternatively, use WSL or a Linux VM if you run into wheel compatibility issues.
+We provide an automated installation script that handles all Python dependencies:
+
+```powershell
+# Run the dependency installation script
+python install_dependencies.py
+```
+
+This script will:
+- Check Python version compatibility (3.8+)
+- Optionally create a virtual environment
+- Install all required backend packages
+- Verify installations and provide setup guidance
+
+### Manual Installation
+
+If you prefer manual installation or the script fails:
+
+Notes: Older docs referenced FAISS/Chroma/Ollama. Those paths have been removed in favor of a single Supabase pgvector + Groq flow. If you see mentions of FAISS in historical notes, you can ignore them.
 
 ## Backend — setup & running (Flask)
+
+### Option 1: Quick Setup (Recommended)
+
+1) Run the automated installation script:
+
+```powershell
+python install_dependencies.py
+```
+
+2) Add environment variables (create `.env` file in project root):
+
+```ini
+# Supabase direct Postgres connection string (ensure sslmode=require)
+SUPABASE_DB_URL=postgresql://postgres.[USER]:[URL_ENCODED_PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require
+
+# Groq API Key
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+3) Run the Flask server:
+
+```powershell
+npm run server
+# OR
+python .\backend\flask_server.py
+```
+
+### Option 2: Manual Setup
 
 1) Create and activate a virtual environment (PowerShell):
 
@@ -105,15 +154,16 @@ pip install -r backend/requirements.txt
 
 3) Add environment variables
 
-- Create a `.env` file at `backend/.env` or project root. At minimum, set `API_KEY` if you plan to use Groq:
+- Create a `.env` file in the project root (or `backend/.env`). At minimum, set:
 
 ```ini
-API_KEY=your_groq_api_key_here
+SUPABASE_DB_URL=postgresql://...
+GROQ_API_KEY=...
 ```
 
-4) Confirm data files
+4) Confirm database readiness
 
-- Verify the FAISS indices and metadata files exist under `faiss_embeddings*/` and the `chromadb_client/` directory is present if you plan to use ChromaDB.
+- Ensure your Supabase database has the `movies` table created and populated with embeddings. See `python-scripts/supabase_training.ipynb`.
 
 5) Run the Flask server
 
@@ -124,12 +174,7 @@ npm run server
 python .\backend\flask_server.py
 ```
 
-The Flask server binds to port 5000 by default and prints logs describing received requests. Startup will load FAISS indices and a SentenceTransformer model — expect some delay on first run.
-
-Important runtime notes:
-
-- The backend preloads a SentenceTransformer model and FAISS index for `BASE_DIR` (default `./faiss_embeddings1`). If those files are large, startup will take longer and memory usage will increase.
-- `model_choice` in the `advanced-query-search` route maps to different index/metadata paths; `6` maps to ChromaDB.
+The Flask server binds to port 5000 by default and prints logs describing received requests. The embedding model loads lazily on the first vector-search request.
 
 ## Frontend — setup & running (React + Vite)
 
@@ -162,37 +207,20 @@ Base URL (default): `http://localhost:5000`
 
 All endpoints accept JSON and return JSON.
 
-1) POST /advanced-query-search
+1) POST /vector-search
 
-Purpose: run a semantic search using FAISS (or ChromaDB for `model_choice=6`) with optional metadata filtering and alpha/beta dual-query reweighting.
+Purpose: run a semantic search using Supabase pgvector. Returns the top-k most similar movies by cosine similarity.
 
 Request JSON fields:
 
-- positive_query (string) — required
-- negative_query (string) — optional
-- top_k (int) — optional (default 10)
-- search_batch_size (int) — optional (default 200)
-- row_checker (object) — optional metadata filter (see examples below)
-- alpha (float) — weight for positive similarity (default 1.0)
-- beta (float) — weight for negative similarity (default 1.0)
-- model_choice (string) — which index/model to use ("1".."6")
-
-row_checker example:
-
-```
-{
-	"min_year": 1990,
-	"max_rating": 9.0,
-	"required_genres": ["Comedy", "Family"],
-	"excluded_languages": ["Hindi"]
-}
-```
+- query_text (string) — required
+- limit (int) — optional (default 10)
 
 Example (PowerShell/curl style):
 
 ```powershell
-curl -X POST http://localhost:5000/advanced-query-search -H "Content-Type: application/json" -d (
-	'{"positive_query":"feel-good family comedy","negative_query":"horror","top_k":5,"row_checker":{"min_year":1990,"required_genres":["Comedy","Family"]},"alpha":1.0,"beta":0.4,"model_choice":"1"}'
+curl -X POST http://localhost:5000/vector-search -H "Content-Type: application/json" -d (
+	'{"query_text":"feel-good family comedy","limit":5}'
 )
 ```
 
@@ -202,32 +230,25 @@ Response format (successful):
 {
 	"results": [
 		{
-			"id": 1234,
-			"positive_similarity": 0.823,
-			"negative_similarity": 0.120,
-			"score": 0.7,
-			"metadata": { /* movie metadata row */ }
+			"id": "tt0316654",
+			"title": "Spider-Man 2",
+			"overview": "Peter Parker is beset...",
+			"similarity": 0.6052
 		},
 		...
 	]
 }
 ```
 
-Notes:
+2) POST /run-groq
 
-- If a row fails metadata checks, the backend assigns it a very low score so it won't appear in the returned top_k.
-- `positive_similarity` comes from the FAISS returned distances/scores; `negative_similarity` is computed internally when a negative query is provided.
-
-2) POST /run-local-gemma
-
-Purpose: proxy chat requests to a local Ollama/Gemma model (default URL `http://localhost:11434/api/chat`).
+Purpose: Use Groq's chat completions API (requires `GROQ_API_KEY`). Send a `messages` array in the request body.
 
 Request:
 
 ```
 {
-	"messages": [{"role":"user","content":"Summarize the top result for me"}],
-	"model":"gemma2:2b"
+	"messages": [{"role":"user","content":"Summarize the top result for me"}]
 }
 ```
 
@@ -237,14 +258,14 @@ Response:
 { "response": "<string>" }
 ```
 
-3) POST /run-groq
+3) GET /health
 
-Purpose: Use Groq's chat completions API (requires `API_KEY`). Send a `messages` array in the request body.
+Purpose: Simple health check endpoint.
 
 Response:
 
 ```
-{ "response": "<string>" }
+{ "status": "ok" }
 ```
 
 ## How to use the app (user-facing guide)
@@ -252,10 +273,7 @@ Response:
 1. Start backend and frontend.
 2. Open `http://localhost:5173` (Vite dev URL).
 3. Navigate to Chat. Enter a natural language query in the input box.
-4. Optionally open the Right Sidebar and set:
-	 - `model_choice` to switch FAISS indices or ChromaDB
-	 - `alpha` / `beta` to change positive vs negative weighting
-	 - metadata filters (year, rating, genres, languages)
+4. Optionally open the Right Sidebar and set Top K for the search.
 5. Submit the query and inspect results in the chat flow. Use the local Gemma/Groq options to summarize or expand on specific results.
 
 UX tips:
@@ -280,27 +298,35 @@ UX tips:
 
 - SentenceTransformer models can be large. Use a smaller model in `flask_server.py` or run on a machine with more memory.
 
-4) ChromaDB returns no results
-
-- Confirm `chromadb_client/` contains the expected DB files and the collection name `best_movies_database` exists.
-
-5) Local Ollama/Gemma connection refused
-
-- Confirm Ollama is running and listening on `http://localhost:11434` or update the URL in `backend/flask_server.py`.
-
-6) CORS issues
+4) CORS issues
 
 - The backend uses `flask_cors.CORS(app)` which is permissive by default. If you have custom network policies, configure CORS accordingly in the server.
 
-7) Backend port mismatch
+5) Backend port mismatch
 
-- If Flask runs on a different port, update the frontend service files in `src/services/` (e.g. `faiss_advanced_query1.jsx`, `choma_query_service.jsx`).
+- If Flask runs on a different port, update the frontend service files in `src/services/` (e.g. `supabase_vector_search.jsx`).
+
+6) Python dependency installation issues
+
+- Use the automated script: `python install_dependencies.py`
+- If the script fails, check Python version (3.8+ required) and try manual installation
+
+7) Supabase connection issues
+
+- Verify your `SUPABASE_DB_URL` in the `.env` file includes the correct password
+- Ensure pgvector extension is enabled in your Supabase dashboard
+- Check that your Supabase project allows connections from your IP address
+
+8) Jupyter notebook kernel issues
+
+- Install Jupyter in your virtual environment: `pip install jupyter notebook ipykernel`
+- Register the kernel: `python -m ipykernel install --user --name=cinebot`
 
 ## Developer notes & next steps
 
-- Add a small `scripts/check-data.py` utility to verify required files before starting the server.
-- Add unit tests for `metadata_filter` and search ranking logic.
-- Improve the UI to better surface `row_checker` construction and validation.
+- **Supabase Integration**: Use the `supabase_training.ipynb` notebook to set up vector embeddings in PostgreSQL
+- Add unit tests around the vector search and response shaping.
+- Improve the UI to better surface the extracted query parameters and filters.
 - Consider adding authentication and rate-limiting before exposing Groq API keys.
 
 ## Contributing

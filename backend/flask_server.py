@@ -1,322 +1,295 @@
-# ---- Core Libraries ----
-import os, json, re, ast, pickle, subprocess
-import pandas as pd
-import numpy as np
-import requests
+import os
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv
-
-# ---- ML Libraries ----
-import faiss
+from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
+import certifi
+import requests
 
-# ---- External APIs ----
-from groq import Groq
-import chromadb
-
-# ---- Setup ----
 app = Flask(__name__)
-CORS(app)
-load_dotenv()
 
-# ---- Global Config ----
-BASE_DIR = "./faiss_embeddings1"
-DEFAULT_MODEL = 'sentence-transformers/multi-qa-MiniLM-L6-cos-v1'
-API_KEY = os.getenv("API_KEY")
-client = Groq(api_key=API_KEY)
+# Configure CORS to work with Vite dev server and allow credentials properly
+FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS")
+if FRONTEND_ORIGINS:
+    allowed_origins = [o.strip() for o in FRONTEND_ORIGINS.split(",") if o.strip()]
+else:
+    # Default Vite dev URLs
+    allowed_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
 
-# ---- FAISS + Metadata ----
-index = faiss.read_index(f"{BASE_DIR}/movie_index.faiss")
-with open(f"{BASE_DIR}/movie_ids.pkl", "rb") as f:
-    id_list = pickle.load(f)
-metadata = pd.read_csv(f"{BASE_DIR}/movie_metadata.csv")
-model = SentenceTransformer(DEFAULT_MODEL)
+CORS(
+    app,
+    resources={r"/*": {"origins": allowed_origins}},
+    supports_credentials=True,
+)
 
-# ---- ChromaDB ----
-chroma_client = chromadb.PersistentClient(path="./chromadb_client")
-collection = chroma_client.get_collection(name="best_movies_database")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+# Support both DB_NAME/COLLECTION_NAME and MONGO_DB_NAME/MONGO_COLLECTION
+DB_NAME = os.getenv("DB_NAME") or os.getenv("MONGO_DB_NAME", "cinebot")
+COLLECTION_NAME = os.getenv("COLLECTION_NAME") or os.getenv("MONGO_COLLECTION", "movies_notebook")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # optional
 
-# ---- Model Maps ----
-model_map = {
-    "1": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-    "2": "sentence-transformers/all-MiniLM-L6-v2",
-    "3": "sentence-transformers/all-distilroberta-v1",
-    "4": "sentence-transformers/distilbert-base-nli-stsb-mean-tokens",
-    "5": "sentence-transformers/all-MiniLM-L12-v2",
-    "6": "chromadb"
-}
-index_map = {
-    "1": "./faiss_embeddings1/movie_index.faiss",
-    "2": "./faiss_embeddings2/movie_index.faiss",
-    "3": "./faiss_embeddings3/movie_index.faiss",
-    "4": "./faiss_embeddings4/movie_index.faiss",
-    "5": "./faiss_embeddings5/movie_index.faiss",
-    "6": None
-}
-metadata_map = {
-    "1": "./faiss_embeddings1/movie_metadata.csv",
-    "2": "./faiss_embeddings2/movie_metadata.csv",
-    "3": "./faiss_embeddings3/movie_metadata.csv",
-    "4": "./faiss_embeddings4/movie_metadata.csv",
-    "5": "./faiss_embeddings5/movie_metadata.csv",
-    "6": None
-}
-id_list_map = {
-    "1": "./faiss_embeddings1/movie_ids.pkl",
-    "2": "./faiss_embeddings2/movie_ids.pkl",
-    "3": "./faiss_embeddings3/movie_ids.pkl",
-    "4": "./faiss_embeddings4/movie_ids.pkl",
-    "5": "./faiss_embeddings5/movie_ids.pkl",
-    "6": None
-}
+# Embedding configuration
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Default to remote embeddings on Vercel to avoid large model downloads
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER") or ("huggingface" if os.getenv("VERCEL") else "local")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# ---- Utils ----
-def clean_nans(obj):
-    if isinstance(obj, dict):
-        return {k: clean_nans(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [clean_nans(i) for i in obj]
-    elif isinstance(obj, float) and (obj != obj):
-        return None
-    return obj
+# Use TLS only for Atlas (mongodb+srv) or when explicitly requested
+tls_required = MONGO_URI.startswith("mongodb+srv://") or os.getenv("MONGO_TLS", "").lower() == "true"
+if tls_required:
+    client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
+else:
+    client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
+coll = db[COLLECTION_NAME]
 
-def metadata_filter(row, checker):
-    def safe_int(value, default=0):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
+print("✅ Mongo connected")
 
-    def safe_float(value, default=0.0):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
+# Only load local model when explicitly requested
+model = None
+if EMBEDDING_PROVIDER.lower() == "local":
+    print(f"🔄 Loading local embedding model: {EMBEDDING_MODEL}")
+    model = SentenceTransformer(EMBEDDING_MODEL)
+    print("✅ Embedding model loaded")
 
-    def safe_set(value):
-        if value is None:
-            return set()
-        if isinstance(value, str):
-            try:
-                parsed = ast.literal_eval(value)
-                if isinstance(parsed, (list, tuple, set)):
-                    return set(map(str.lower, map(str, parsed)))
-                return set()
-            except Exception:
-                return set()
-        elif isinstance(value, (list, tuple, set)):
-            return set(map(str.lower, map(str, value)))
-        return set()
 
-    # Ensure row and checker are dicts
-    if not isinstance(row, dict):
-        row = {}
-    if not isinstance(checker, dict):
-        checker = {}
+def embed_text(text: str):
+    """Return embedding vector for the given text using configured provider."""
+    provider = (EMBEDDING_PROVIDER or "local").lower()
+    if provider == "local":
+        if not model:
+            raise RuntimeError("Embedding model not loaded. Set EMBEDDING_PROVIDER=huggingface on Vercel or load local model.")
+        vec = model.encode(text)
+        return vec.tolist() if hasattr(vec, "tolist") else vec
+    # Remote via Hugging Face Inference API
+    if not HUGGINGFACE_API_KEY:
+        raise RuntimeError("HUGGINGFACE_API_KEY is required for remote embeddings")
+    url = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}", "Content-Type": "application/json"}
+    try:
+        resp = requests.post(url, headers=headers, json={"inputs": text, "options": {"wait_for_model": True}}, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        # Response can be nested [[...]]; flatten one level if needed
+        if isinstance(data, list) and data and isinstance(data[0], list):
+            return data[0]
+        return data
+    except Exception as e:
+        print(f"❌ Embedding API error: {e}")
+        raise
 
-    # Parse and sanitize row values
-    year = safe_int(row.get("year"))
-    rating = safe_float(row.get("rating"))
-    duration = safe_int(row.get("duration"))
-    genres = safe_set(row.get("genres"))
-    languages = safe_set(row.get("languages"))
 
-    # Checker filters with sensible defaults
-    min_year = safe_int(checker.get("min_year"), default=float("-inf"))
-    max_year = safe_int(checker.get("max_year"), default=float("inf"))
-    min_rating = safe_float(checker.get("min_rating"), default=float("-inf"))
-    max_rating = safe_float(checker.get("max_rating"), default=float("inf"))
-    min_duration = safe_int(checker.get("min_duration"), default=float("-inf"))
-    max_duration = safe_int(checker.get("max_duration"), default=float("inf"))
-    required_genres = safe_set(checker.get("required_genres"))
-    excluded_genres = safe_set(checker.get("excluded_genres"))
-    required_languages = safe_set(checker.get("required_languages"))
-    excluded_languages = safe_set(checker.get("excluded_languages"))
-
-    # Apply all filters
-    return (
-        min_year <= year <= max_year and
-        min_rating <= rating <= max_rating and
-        min_duration <= duration <= max_duration and
-        (not required_genres or genres & required_genres) and
-        not (genres & excluded_genres) and
-        (not required_languages or languages & required_languages) and
-        not (languages & excluded_languages)
+@app.after_request
+def add_cors_headers(resp):
+    """Ensure CORS headers are present for common methods and headers.
+    Flask-CORS usually sets these, but explicitly adding avoids edge cases with preflight.
+    """
+    resp.headers.setdefault(
+        "Access-Control-Allow-Methods",
+        "GET, POST, OPTIONS, PUT, PATCH, DELETE",
     )
-    
-def search_movies_dual_query_fast(
-    positive_query,
-    negative_query=None,
-    top_k=10,
-    search_batch_size=200,
-    row_checker={},
-    alpha=1.0,
-    beta=1.0
-):
-    pos_embed = model.encode([positive_query], normalize_embeddings=True).astype("float32")
-    neg_embed = model.encode([negative_query], normalize_embeddings=True).astype("float32") if negative_query else None
-
-    D_pos, I_pos = index.search(pos_embed, search_batch_size)
-    results = []
-
-    for i, idx in enumerate(I_pos[0]):
-        movie_id = id_list[idx]
-        row = metadata[metadata["id"] == movie_id].iloc[0].to_dict()
-        
-
-        pos_sim = float(D_pos[0][i])
-        neg_sim = float(np.dot(index.reconstruct(i), neg_embed[0])) if neg_embed is not None else 0.0
-        score = alpha * pos_sim - beta * neg_sim
-
-        if not metadata_filter(row, row_checker):
-            score = -1e10 
-
-        results.append({
-            "id": movie_id,
-            "positive_similarity": pos_sim,
-            "negative_similarity": neg_sim,
-            "score": score,
-            "metadata": row
-        })
-
-    return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+    resp.headers.setdefault(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-Requested-With",
+    )
+    return resp
 
 
-def run_local_ollama(messages, model="gemma2:2b"):
-    print("Running local Ollama model...")
-    url = "http://localhost:11434/api/chat"
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False  # change to True if you want streaming
-    }
-
-    try:
-        response = requests.post(url, json=payload)
-        print("Response status code:", response.status_code)
-        print("Response content:", response.content)
-        response.raise_for_status()  # Raise error for non-2xx responses
-        return response.json()["message"]["content"]
-    except requests.exceptions.RequestException as e:
-        print("Request failed:", e)
-        return f"Request failed: {e}"
-    except KeyError:
-        print("Unexpected response format:", response.text)
-        return f"Unexpected response format: {response.text}"
-    except exception as e:
-        print("An error occurred:", e)
-        return f"An error occurred: {e}"
-
-def extract_json(text):
-    print("Text to parse:", text)
-    try:
-        match = re.search(r"\{[\s\S]*?\}", text)
-        return json.loads(match.group(0)) if match else None
-    except Exception as e:
-        print("JSON parse error:", e)
-        return None
-
-def query_chromadb_with_filter(query, checker, top_k=10):
-    filters = []
-    if "min_year" in checker or "max_year" in checker:
-        c = []
-        if "min_year" in checker: c.append({"year": {"$gte": checker["min_year"]}})
-        if "max_year" in checker: c.append({"year": {"$lte": checker["max_year"]}})
-        filters.append({"$and": c} if len(c) > 1 else c[0])
-    if "min_rating" in checker or "max_rating" in checker:
-        c = []
-        if "min_rating" in checker: c.append({"rating": {"$gte": checker["min_rating"]}})
-        if "max_rating" in checker: c.append({"rating": {"$lte": checker["max_rating"]}})
-        filters.append({"$and": c} if len(c) > 1 else c[0])
-
-    where_clause = {"$and": filters} if len(filters) > 1 else (filters[0] if filters else None)
-    results = collection.query(query_texts=[query], n_results=top_k, where=where_clause) if where_clause else collection.query(query_texts=[query], n_results=top_k)
-    return results
-
-# ---- Routes ----
-@app.route('/run-groq', methods=['POST'])
+@app.route("/run-groq", methods=["POST"]) 
+@app.route("/api/run-groq", methods=["POST"]) 
 def run_groq():
+    """
+    Generate structured JSON query (positive_query, negative_query, row_checker).
+    Uses GROQ if key provided; otherwise returns a fallback JSON.
+    """
     try:
-        messages = request.get_json().get("messages", [])
-        response = client.chat.completions.create(
-            messages=messages, model="llama-3.3-70b-versatile", max_tokens=10000
-        )
-        return jsonify({"response": response.choices[0].message.content})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        data = request.get_json(silent=True) or {}
+        user_input = data.get("user_input") or data.get("messages") or ""
+        if isinstance(user_input, list):
+            # Take the latest user message content
+            try:
+                user_input = next(
+                    (m.get("content", "") for m in reversed(user_input) if m.get("role") == "user"),
+                    user_input[-1].get("content", "") if user_input else "",
+                )
+            except Exception:
+                user_input = ""
 
-@app.route('/run-local-gemma', methods=['POST'])
-def run_local_gemma():
+        def make_fallback(text):
+            fb = {
+                "positive_query": text or "",
+                "negative_query": "",
+                "row_checker": {"required_genres": []},
+            }
+            return jsonify({"response": json.dumps(fb)})
+
+        # No key -> fallback
+        if not GROQ_API_KEY:
+            return make_fallback(user_input)
+
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": "llama3-70b-8192",
+            "messages": [
+                {"role": "system", "content": "You are a JSON generator for movie search queries. Respond ONLY with JSON."},
+                {"role": "user", "content": f"User input: {user_input}"},
+            ],
+            "temperature": 0.2,
+        }
+
+        try:
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=20,
+            )
+        except Exception as net_err:
+            print(f"⚠️ GROQ request failed: {net_err}")
+            return make_fallback(user_input)
+
+        if res.status_code != 200:
+            print(f"⚠️ GROQ non-200: {res.status_code} {res.text[:200]}")
+            return make_fallback(user_input)
+
+        try:
+            data = res.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content")
+        except Exception as parse_err:
+            print(f"⚠️ GROQ parse error: {parse_err}")
+            text = None
+
+        if not text:
+            return make_fallback(user_input)
+        return jsonify({"response": text})
+
+    except Exception as e:
+        print(f"❌ run_groq error: {e}")
+        # Never 500 the client here; always provide a fallback response
+        try:
+            return jsonify({
+                "response": json.dumps({
+                    "positive_query": "",
+                    "negative_query": "",
+                    "row_checker": {"required_genres": []},
+                })
+            })
+        except Exception:
+            return jsonify({"response": "{\"positive_query\":\"\",\"negative_query\":\"\",\"row_checker\":{\"required_genres\":[]}}"})
+
+
+@app.route("/search", methods=["POST"]) 
+@app.route("/api/search", methods=["POST"]) 
+def search_movies():
     try:
         data = request.get_json()
-        messages = data.get("messages", [])
-        model = data.get("model", "gemma2:2b")
+        query = data.get("query", "")
+        filters = data.get("filters", {})
+        limit = int(data.get("limit", 10))
 
-        # Call local Ollama
-        content = run_local_ollama(messages=messages, model=model)
-        print("Raw response content:", content)
+        if not query:
+            return jsonify({"results": []})
 
-        return jsonify({"response": content})
+        # get query embedding
+        query_vector = embed_text(query)
+
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "movie_vector_index",
+                    "path": "embedding",
+                    "queryVector": query_vector,
+                    "numCandidates": 200,
+                    "limit": limit
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "id": 1,
+                    "title": 1,
+                    "year": 1,
+                    "genres": 1,
+                    "languages": 1,
+                    "rating": 1,
+                    "duration": 1,
+                    "description": 1,
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            }
+        ]
+
+        if filters:
+            pipeline.insert(1, {"$match": filters})
+
+        try:
+            results = list(coll.aggregate(pipeline))
+        except Exception as ve:
+            # If $vectorSearch is unavailable (local Mongo) or index missing, fall back
+            print(f"⚠️ Vector search failed, falling back to regex search: {ve}")
+            results = []
+
+        # If vector search returned nothing, try a simple regex fallback
+        if not results:
+            # Build a basic regex OR across words (escape special characters)
+            import re
+            words = [w for w in re.split(r"\s+", query) if w]
+            if words:
+                escaped = [re.escape(w) for w in words]
+                regex = "|".join(escaped)
+                match_stage = {
+                    "$or": [
+                        {"title": {"$regex": regex, "$options": "i"}},
+                        {"description": {"$regex": regex, "$options": "i"}},
+                        {"genres": {"$in": words}},
+                        {"languages": {"$in": words}},
+                    ]
+                }
+
+                fallback_pipeline = []
+                if filters:
+                    fallback_pipeline.append({"$match": filters})
+                fallback_pipeline.append({"$match": match_stage})
+                fallback_pipeline.append({
+                    "$project": {
+                        "_id": 0,
+                        "id": 1,
+                        "title": 1,
+                        "year": 1,
+                        "genres": 1,
+                        "languages": 1,
+                        "rating": 1,
+                        "duration": 1,
+                        "description": 1,
+                    }
+                })
+                fallback_pipeline.append({"$limit": limit})
+                try:
+                    results = list(coll.aggregate(fallback_pipeline))
+                except Exception as fe:
+                    print(f"❌ Fallback search failed: {fe}")
+                    results = []
+
+        return jsonify({"results": results})
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        print(f"❌ /search error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-
-@app.route('/advanced-query-search', methods=['POST'])
-def advanced_query_search():
-    data = {}  # Ensure data is always defined
-    try:
-        data = request.get_json()
-        positive_query = data.get('positive_query')
-        negative_query = data.get('negative_query')
-        row_checker = data.get('row_checker', {})
-        top_k = int(data.get('top_k', 10))
-        batch_size = int(data.get('search_batch_size', 200))
-        alpha = float(data.get('alpha', 1.0))
-        beta = float(data.get('beta', 1.0))
-        model_choice = data.get('model_choice', '1')
-
-        print("Received data:", data)
-
-        if not positive_query:
-            return jsonify({"error": "positive_query is required"}), 400
-
-        if model_choice == "6":
-            return jsonify({"results": clean_nans(query_chromadb_with_filter(positive_query, row_checker, top_k)["metadatas"])})
-
-        if model_choice not in model_map:
-            return jsonify({"error": "Invalid model choice"}), 400
-
-        global model, index, metadata, id_list
-        model = SentenceTransformer(model_map[model_choice])
-        index = faiss.read_index(index_map[model_choice])
-        metadata = pd.read_csv(metadata_map[model_choice])
-        with open(id_list_map[model_choice], "rb") as f:
-            id_list = pickle.load(f)
-
-        results = search_movies_dual_query_fast(
-            positive_query=positive_query,
-            negative_query=negative_query,
-            top_k=top_k,
-            search_batch_size=batch_size,
-            row_checker=row_checker,
-            alpha=alpha,
-            beta=beta
-        )
-        return jsonify({"results": clean_nans(results)})
-
-    except Exception as e:
-        import traceback
-        print("Error in /advanced-query-search:", traceback.format_exc())
-        return jsonify({
-            "error": str(e),
-            "payload": data  # Include payload for easier debugging
-        }), 500
+@app.route("/", methods=["GET"]) 
+@app.route("/api", methods=["GET"]) 
+def home():
+    return jsonify({"status": "Server running"})
 
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import './index.css';
 import Navbar from '../Navbar';
-import handleChromaQuery from '../services/choma_query_service';
-import handleAdvancedQuerySearch from '../services/faiss_advanced_query1';
 import runGroqQuery from '../services/grok_query_script';
 import ChatBox from './ChatBox';
 import SavedChats from './SavedChats';
 import UserInput from './UserInput';
-import RightSidebar from './RightSidebar'; // Import RightSidebar
-import runLocalGemmaQuery from '../services/gemma_query_script'; // Import runLocalGemmaQuery
+import RightSidebar from './RightSidebar';
+import mongoVectorSearch from '../services/mongo_query_script';
 
 function ChatPage() {
   const default_start_of_chat = [
@@ -19,15 +17,10 @@ function ChatPage() {
   const [currentChatIndex, setCurrentChatIndex] = useState(null);
   const [dialogList, setDialogList] = useState(default_start_of_chat);
   const [userInput, setUserInput] = useState('');
-  const [modelChoice, setModelChoice] = useState('1'); // Store selected model choice
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('Loading...');
-  const [useGroqModel, setUseGroqModel] = useState(true); // true = use Groq, false = use Ollama
-  const [useModel, setUseModel] = useState('gemma2:2b'); // default local model name
-  const [alpha, setAlpha] = useState(1.0);
-  const [beta, setBeta] = useState(1.0);
   const [topK, setTopK] = useState(10);
-  const [searchBatchSize, setSearchBatchSize] = useState(200);
+  
   
 
 
@@ -46,6 +39,7 @@ function ChatPage() {
   };
 
   const extractJsonFromText = (text) => {
+    if (typeof text !== 'string') return text; // guard against null/objects
     const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
     if (!match) return text;
   
@@ -110,9 +104,7 @@ function ChatPage() {
       ];
 
       setLoadingMessage('Generating query parameters...');
-      const promptForQueryParams = useGroqModel
-      ? await runGroqQuery(queryDialog)
-      : await runLocalGemmaQuery(queryDialog, useModel);
+      const promptForQueryParams = await runGroqQuery(queryDialog)
     
       console.log('Prompt for query params:', promptForQueryParams);
 
@@ -151,19 +143,56 @@ function ChatPage() {
 
       setLoadingMessage('Running vector search...');
       // Step 2: Run vector search with the generated parameters
-      const searchResponse = await handleAdvancedQuerySearch({
-        ...queryParams,
-        top_k: topK,
-        search_batch_size: searchBatchSize,
-        alpha,
-        beta,
-        model_choice: modelChoice,
+      const searchResponse = await mongoVectorSearch({
+        query_text: queryParams.positive_query,
+        negative_query: queryParams.negative_query || '',
+        limit: topK,
+        row_checker: queryParams.row_checker || {}
       });
       
 
       setLoadingMessage('Vector search completed!');
       console.log('Search response:', searchResponse);
       const movieCandidates = searchResponse?.results || [];
+
+      // Helper: local fallback recommendation when LLM not available
+      const makeLocalRecommendations = (cands, n = 3) => {
+        if (!Array.isArray(cands) || cands.length === 0) {
+          return 'I could not find matching movies. Try adjusting your filters or rephrasing your request.';
+        }
+
+        // Prefer by score desc; fallback to rating desc; then title asc
+        const sorted = [...cands].sort((a, b) => {
+          const sa = typeof a.score === 'number' ? a.score : -Infinity;
+          const sb = typeof b.score === 'number' ? b.score : -Infinity;
+          if (sa !== sb) return sb - sa;
+          const ra = typeof a.rating === 'number' ? a.rating : -Infinity;
+          const rb = typeof b.rating === 'number' ? b.rating : -Infinity;
+          if (ra !== rb) return rb - ra;
+          return String(a.title || '').localeCompare(String(b.title || ''));
+        });
+
+        const top = sorted.slice(0, n);
+        const fmt = (s = '', maxWords = 40) => {
+          const words = String(s).split(/\s+/).filter(Boolean);
+          return words.length > maxWords ? words.slice(0, maxWords).join(' ') + '…' : words.join(' ');
+        };
+
+        const lines = top.map((m, idx) => {
+          const title = m.title || 'Untitled';
+          const year = m.year ? ` (${m.year})` : '';
+          const genres = Array.isArray(m.genres) ? m.genres.join(', ') : (m.genres || '');
+          const rating = m.rating != null ? ` | Rating: ${m.rating}` : '';
+          const lang = Array.isArray(m.languages) ? m.languages.join(', ') : (m.languages || '');
+          const desc = fmt(m.description || '');
+          const imdb = m.id ? ` [IMDb](https://www.imdb.com/title/${m.id}/)` : '';
+          const meta = [genres, lang].filter(Boolean).join(' • ');
+          const metaLine = meta ? ` (${meta})` : '';
+          return `- ${idx + 1}. **${title}${year}**${imdb}${rating}${metaLine}\n  ${desc}`;
+        });
+
+        return `Here are my top ${Math.min(n, top.length)} picks based on your request:\n\n${lines.join('\n')}`;
+      };
 
       // Step 3: Ask the LLM to pick the most suitable movies from the list (with full context)
       const refineDialog = [
@@ -180,14 +209,19 @@ function ChatPage() {
         },
       ];
       setLoadingMessage('Generating refined movie selection...');
-      const promptToRefineSelection = useGroqModel
-      ? await runGroqQuery(refineDialog)
-      : await runLocalGemmaQuery(refineDialog, useModel);
-    
+  const promptToRefineSelection = await runGroqQuery(refineDialog)
+      
+      // If LLM unavailable or returned a JSON-looking fallback, synthesize a local recommendation
+      let refinedContent = promptToRefineSelection;
+      const looksLikeJson = typeof refinedContent === 'string' && refinedContent.trim().startsWith('{');
+      if (!refinedContent || looksLikeJson) {
+        refinedContent = makeLocalRecommendations(movieCandidates, 3);
+      }
+
       // Step 4: Display final assistant reply
       const finalDialog = [
         ...updatedDialog,
-        { role: 'assistant', content: promptToRefineSelection },
+        { role: 'assistant', content: refinedContent },
       ];
       setLoadingMessage('Generating final response...');
       setIsLoading(false);
@@ -202,9 +236,7 @@ function ChatPage() {
 
   };
 
-  const handleModelChange = (modelChoice) => {
-    setModelChoice(modelChoice); // Update selected model choice
-  };
+  const handleModelChange = (_modelChoice) => {};
 
   const handleInputChange = (e) => {
     setUserInput(e.target.value);
@@ -251,18 +283,8 @@ function ChatPage() {
 
         <RightSidebar
             onModelChange={handleModelChange}
-            useGroqModel={useGroqModel}
-            setUseGroqModel={setUseGroqModel}
-            useModel={useModel}
-            setUseModel={setUseModel}
-            alpha={alpha}
-            setAlpha={setAlpha}
-            beta={beta}
-            setBeta={setBeta}
             topK={topK}
             setTopK={setTopK}
-            searchBatchSize={searchBatchSize}
-            setSearchBatchSize={setSearchBatchSize}
           />
 
         </div>

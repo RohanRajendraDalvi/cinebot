@@ -1,0 +1,12 @@
+{
+  "builds": [
+    { "src": "backend/flask_server.py", "use": "@vercel/python" },
+    { "src": "package.json", "use": "@vercel/static-build" }
+  ],
+  "routes": [
+    { "src": "^/api/(.*)$", "dest": "backend/flask_server.py" }
+  ],
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}
