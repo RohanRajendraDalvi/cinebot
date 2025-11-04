@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "python ./backend/flask_server.py",
+    "install-backend:posix": "python3 -m venv .venv && . .venv/bin/activate && python -m pip install --upgrade pip && pip install -r ./backend/requirements.txt",
     "install-backend": "powershell -NoProfile -Command \"python -m venv .venv; .\\.venv\\Scripts\\Activate.ps1; python -m pip install --upgrade pip; pip install -r .\\backend\\requirements.txt\"",
     "install-backend:unix": "sh -c 'python3 -m venv .venv && source .venv/bin/activate && python -m pip install --upgrade pip && pip install -r ./backend/requirements.txt'"
   },
