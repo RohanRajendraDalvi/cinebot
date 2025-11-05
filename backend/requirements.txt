@@ -3,9 +3,10 @@ flask-cors
 python-dotenv
 groq
 psycopg2-binary
-sentence-transformers
+sentence-transformers==2.2.2
+torch==2.2.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
 numpy
 pymongo
-bson
 requests
 certifi
