@@ -4,8 +4,7 @@ python-dotenv
 groq
 psycopg2-binary
 sentence-transformers==2.2.2
-torch==2.2.0+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
 numpy
 pymongo
 requests
